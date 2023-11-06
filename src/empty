@@ -1,0 +1,135 @@
+/*
+<><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>
+<  LiDAR CR/IR GUI 11/1/2023 
+<   
+<       AUTHOR: Drew Patton, Noah Wilson  
+<       DATE CREATED: 11/1/2023                                                        
+<       GROUP: Avanced Technology
+<       PROJECT: LiDAR for L2 Applications CR/IR 
+<       CUSTOMER: Dan Heafs 
+<       DESCRIPTION: 
+<		This program contains a single function that reads pointcloud data from a .csv <		file and finds clusters in it. This code is based on Noah Wilson's code written <		in python.  
+<><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>
+*/
+
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <string>
+#include <algorithm>
+#include <opencv2/opencv.hpp>
+
+class DBSCAN {
+public:
+    DBSCAN(float eps, int min_samples) : eps(eps), min_samples(min_samples) {}
+
+    void fit(const std::vector<cv::Point3f>& points) {
+        int numPoints = points.size();
+        std::vector<int> labels(numPoints, 0);
+        int cluster = 1;    
+
+        for (int i = 0; i < numPoints; ++i) {
+            if (labels[i] != 0) continue;
+
+            std::vector<int> neighbors = regionQuery(points, i);
+
+            if (neighbors.size() < min_samples) {
+                labels[i] = -1;  // Noise
+            } else {
+                expandCluster(points, labels, i, neighbors, cluster);
+                cluster++;
+            }
+        }
+
+        int n_clusters = cluster - 1;
+        int n_noise = std::count(labels.begin(), labels.end(), -1);
+
+        std::cout << "Estimated number of clusters: " << n_clusters << std::endl;
+        std::cout << "Estimated number of noise points: " << n_noise << std::endl;
+    }
+
+private:
+    float eps;
+    int min_samples;
+
+    std::vector<int> regionQuery(const std::vector<cv::Point3f>& points, int pointIndex) {
+        std::vector<int> neighbors;
+
+        for (int i = 0; i < points.size(); ++i) {
+            if (cv::norm(points[pointIndex] - points[i]) < eps) {
+                neighbors.push_back(i);
+            }
+        }
+
+        return neighbors;
+    }
+
+    void expandCluster(const std::vector<cv::Point3f>& points, std::vector<int>& labels, int pointIndex, const std::vector<int>& neighbors, int cluster) {
+        labels[pointIndex] = cluster;
+
+        for (int i = 0; i < neighbors.size(); ++i) {
+            int neighborIndex = neighbors[i];
+
+            if (labels[neighborIndex] == 0) {
+                labels[neighborIndex] = cluster;
+                std::vector<int> newNeighbors = regionQuery(points, neighborIndex);
+
+                if (newNeighbors.size() >= min_samples) {
+                    neighbors.insert(neighbors.end(), newNeighbors.begin(), newNeighbors.end());
+                }
+            }
+        }
+    }
+};
+
+void cluster() {
+    std::ifstream input("stationary0.csv");
+    if (!input) {
+        std::cerr << "Failed to open the input file." << std::endl;
+        return;
+    }
+
+    std::vector<cv::Point3f> points;
+    std::string line;
+
+    while (std::getline(input, line)) {
+        std::istringstream iss(line);
+        float x, y, z;
+        if (iss >> x >> y >> z) {
+            points.push_back(cv::Point3f(x, y, z));
+        }
+    }
+
+    float eps = 0.2;
+    int min_samples = 6;
+    DBSCAN dbscan(eps, min_samples);
+    dbscan.fit(points);
+
+    cv::Mat plot(points.size(), 2, CV_32F);
+    for (int i = 0; i < points.size(); ++i) {
+        plot.at<float>(i, 0) = points[i].y;
+        plot.at<float>(i, 1) = points[i].z;
+    }
+
+    cv::Mat labels;
+    cv::DBSCAN(plot, labels, 0.2, 6);
+
+    cv::RNG rng(12345);
+    cv::Mat color_labels;
+    labels.convertTo(color_labels, CV_8U);
+    cv::Mat colors(256, 1, CV_8UC3);
+    for (int i = 0; i < 256; i++) {
+        cv::Scalar color = cv::Scalar(rng.uniform(0, 256), rng.uniform(0, 256), rng.uniform(0, 256));
+        colors.at<cv::Vec3b>(i, 0) = color;
+    }
+
+    cv::LUT(color_labels, colors, color_labels);
+    cv::imshow("Clusters", color_labels);
+    cv::waitKey(0);
+}
+
+int main() {
+    cluster();
+    return 0;
+}
+
